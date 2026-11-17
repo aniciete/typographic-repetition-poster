@@ -163,7 +163,7 @@ def render_animated_gif(
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
     if anim_style == "emerge":
-        # Endless waterfall radiating continuously outward from a still root, clipped on the root
+        # Endless slit-window waterfall radiating from a still root (MFC / Give Yourself A Try style)
         curr_y = pad_px * 0.5
         rest_ys: list[float] = []
         row_hs: list[float] = []
@@ -177,74 +177,72 @@ def render_animated_gif(
 
         root_idx = n_rows // 2
         root_top = rest_ys[root_idx]
-        root_bottom = root_top + row_hs[root_idx]
-        base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
+        root_h = row_hs[root_idx]
+        root_bottom = root_top + root_h
+        root_text = rows[root_idx]
         root_font = ImageFont.truetype(font_path, sizes[root_idx])
-        row_fonts = [ImageFont.truetype(font_path, s) for s in sizes]
+        root_top_off = top_offsets[root_idx]
+        base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
 
-        # Build ordered cycles from closest-to-root outward
-        upper_indices = list(range(root_idx - 1, -1, -1))
-        lower_indices = list(range(root_idx + 1, n_rows))
-
-        def build_cycle(indices: list[int]) -> tuple[list[tuple[int, float]], float]:
-            items: list[tuple[int, float]] = []
-            offset = 0.0
-            for idx in indices:
-                items.append((idx, offset))
-                offset += row_hs[idx] + gap_px
-            return items, max(1.0, offset)
-
-        upper_cycle, upper_cycle_h = build_cycle(upper_indices)
-        lower_cycle, lower_cycle_h = build_cycle(lower_indices)
-        upper_clip = (0, 0, width_px, max(0, int(round(root_top))))
-        lower_clip = (0, min(height_px, int(round(root_bottom))), width_px, height_px)
+        # Fixed slit-window bands above and below the root (using outer row heights & gaps)
+        upper_bands = [
+            (max(0, int(round(rest_ys[i]))), max(0, int(round(rest_ys[i] + row_hs[i]))))
+            for i in range(root_idx)
+        ]
+        lower_bands = [
+            (min(height_px, int(round(rest_ys[i]))), min(height_px, int(round(rest_ys[i] + row_hs[i]))))
+            for i in range(root_idx + 1, n_rows)
+        ]
+        cycle_h = max(1.0, root_h + gap_px)
 
         for f in range(frames_count):
             t = f / frames_count
+            shift = t * cycle_h
             img = Image.new("RGB", (width_px, height_px), paper)
 
-            if upper_indices and upper_clip[3] > upper_clip[1]:
+            # Upper slit windows: full-size root word scrolls continuously upward
+            if upper_bands:
                 layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
                 ldraw = ImageDraw.Draw(layer)
-                shift = t * upper_cycle_h
-                max_k = int(math.ceil(root_top / upper_cycle_h)) + 1
+                max_k = int(math.ceil((root_bottom + cycle_h) / cycle_h)) + 1
                 for k in range(-1, max_k + 1):
-                    for idx, local_d in upper_cycle:
-                        bottom_y = root_top - (k * upper_cycle_h + local_d + shift)
-                        y_pos = bottom_y - row_hs[idx]
-                        if y_pos + row_hs[idx] > 0 and y_pos < root_top:
-                            ldraw.text(
-                                (pad_px, y_pos - top_offsets[idx]),
-                                rows[idx],
-                                font=row_fonts[idx],
-                                fill=(*base_colors[idx], 255),
-                            )
-                cropped = layer.crop(upper_clip)
-                img.paste(cropped, (0, upper_clip[1]), cropped)
+                    y_pos = root_top - (k * cycle_h + shift)
+                    if y_pos + root_h > 0 and y_pos < root_top:
+                        ldraw.text(
+                            (pad_px, y_pos - root_top_off),
+                            root_text,
+                            font=root_font,
+                            fill=(*base_colors[0], 255),
+                        )
+                for b_top, b_bot in upper_bands:
+                    if b_bot > b_top:
+                        cropped = layer.crop((0, b_top, width_px, b_bot))
+                        img.paste(cropped, (0, b_top), cropped)
 
-            if lower_indices and lower_clip[3] > lower_clip[1]:
+            # Lower slit windows: full-size root word scrolls continuously downward
+            if lower_bands:
                 layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
                 ldraw = ImageDraw.Draw(layer)
-                shift = t * lower_cycle_h
-                max_k = int(math.ceil((height_px - root_bottom) / lower_cycle_h)) + 1
+                max_k = int(math.ceil((height_px - root_top + cycle_h) / cycle_h)) + 1
                 for k in range(-1, max_k + 1):
-                    for idx, local_d in lower_cycle:
-                        y_pos = root_bottom + (k * lower_cycle_h + local_d + shift)
-                        if y_pos + row_hs[idx] > root_bottom and y_pos < height_px:
-                            ldraw.text(
-                                (pad_px, y_pos - top_offsets[idx]),
-                                rows[idx],
-                                font=row_fonts[idx],
-                                fill=(*base_colors[idx], 255),
-                            )
-                cropped = layer.crop(lower_clip)
-                img.paste(cropped, (0, lower_clip[1]), cropped)
+                    y_pos = root_top + (k * cycle_h + shift)
+                    if y_pos + root_h > root_bottom and y_pos < height_px:
+                        ldraw.text(
+                            (pad_px, y_pos - root_top_off),
+                            root_text,
+                            font=root_font,
+                            fill=(*base_colors[-1], 255),
+                        )
+                for b_top, b_bot in lower_bands:
+                    if b_bot > b_top:
+                        cropped = layer.crop((0, b_top, width_px, b_bot))
+                        img.paste(cropped, (0, b_top), cropped)
 
             # Draw the still root row on top
             draw = ImageDraw.Draw(img)
             draw.text(
-                (pad_px, root_top - top_offsets[root_idx]),
-                rows[root_idx],
+                (pad_px, root_top - root_top_off),
+                root_text,
                 font=root_font,
                 fill=base_colors[root_idx],
             )
