@@ -163,32 +163,22 @@ def render_animated_gif(
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
     if anim_style == "emerge":
-        # Endless waterfall radiating from a still root through open top/bottom clip windows
-        curr_y = pad_px * 0.5
-        rest_ys: list[float] = []
-        row_hs: list[float] = []
-        top_offsets: list[float] = []
-        for size in sizes:
-            top_off, h = row_metrics(font_path, "Hg", size, tight)
-            rest_ys.append(curr_y)
-            row_hs.append(h)
-            top_offsets.append(top_off)
-            curr_y += h + gap_px
-
+        # Endless waterfall radiating symmetrically from a still root through equal top/bottom clip windows
         root_idx = n_rows // 2
-        root_top = rest_ys[root_idx]
-        root_h = row_hs[root_idx]
-        root_bottom = root_top + root_h
         root_text = rows[root_idx]
         root_font = ImageFont.truetype(font_path, sizes[root_idx])
-        root_top_off = top_offsets[root_idx]
+        root_top_off, root_h = row_metrics(font_path, root_text, sizes[root_idx], tight)
         base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
 
-        # Two open clipping windows: above (top_edge .. root_top - gap) and below (root_bottom + gap .. bottom_edge)
+        # Center the root vertically so upper and lower clip windows are pixel-symmetrical
+        center_y = height_px / 2.0
+        root_top = center_y - root_h / 2.0
+        root_bottom = center_y + root_h / 2.0
+
         top_edge = max(0, int(round(pad_px * 0.5)))
-        upper_end = max(top_edge, int(round(root_top - gap_px)))
-        lower_start = min(height_px, int(round(root_bottom + gap_px)))
         bottom_edge = min(height_px, int(round(height_px - pad_px * 0.5)))
+        upper_end = max(top_edge, int(round(root_top - gap_px)))
+        lower_start = min(bottom_edge, int(round(root_bottom + gap_px)))
 
         upper_clip = (0, top_edge, width_px, upper_end)
         lower_clip = (0, lower_start, width_px, bottom_edge)
