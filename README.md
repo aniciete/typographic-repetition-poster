@@ -57,7 +57,7 @@ python3 poster.py "TYPOGRAPHY" \
 | `--accent` | `#e63946` | Accent hex color |
 | `--paper` | `#f8f9fa` | Background hex color |
 | `--animate` | `false` | Export an animated GIF instead of a static PNG |
-| `--anim-style` | `kinetic` | Animation style: `kinetic`, `wave`, `pulse`, `rainbow-shift`, `cascade` |
+| `--anim-style` | `kinetic` | Animation style: `kinetic`, `emerge`, `wave`, `pulse`, `rainbow-shift`, `cascade` |
 | `--frames` | `48` | Number of frames for animated GIF |
 | `--fps` | `24` | Frames per second for animated GIF |
 | `--out` | `""` | Custom output file path |

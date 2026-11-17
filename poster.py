@@ -162,6 +162,95 @@ def render_animated_gif(
     phase_step = 2.0 * math.pi / max(2.0, center + 1.0)
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
+    if anim_style == "emerge":
+        # Precompute resting row layout; root stays still while outer rows emerge and clip on the root
+        curr_y = pad_px * 0.5
+        rest_ys: list[float] = []
+        row_hs: list[float] = []
+        top_offsets: list[float] = []
+        for size in sizes:
+            top_off, h = row_metrics(font_path, "Hg", size, tight)
+            rest_ys.append(curr_y)
+            row_hs.append(h)
+            top_offsets.append(top_off)
+            curr_y += h + gap_px
+
+        root_idx = n_rows // 2
+        root_top = rest_ys[root_idx]
+        root_bottom = root_top + row_hs[root_idx]
+        base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
+        root_font = ImageFont.truetype(font_path, sizes[root_idx])
+
+        for f in range(frames_count):
+            t = f / frames_count
+            # 0.00-0.42: emerge out, 0.42-0.58: hold full, 0.58-0.96: retract in, 0.96-1.00: hold root
+            if t < 0.42:
+                raw_p = t / 0.42
+                p_global = 1.0 - (1.0 - raw_p) ** 3
+            elif t < 0.58:
+                p_global = 1.0
+            elif t < 0.96:
+                raw_p = (t - 0.58) / 0.38
+                p_global = 1.0 - (raw_p ** 3)
+            else:
+                p_global = 0.0
+
+            img = Image.new("RGB", (width_px, height_px), paper)
+
+            for i in range(n_rows):
+                if i == root_idx:
+                    continue
+                dist = abs(i - root_idx)
+                # Subtle stagger: inner rows lead slightly out of the root
+                stagger = (dist - 1) * 0.08
+                p = max(0.0, min(1.0, (p_global - stagger) / max(0.01, 1.0 - stagger * (n_rows // 2))))
+                if p <= 0.0:
+                    continue
+
+                if i < root_idx:
+                    start_y = root_top
+                    clip_box = (0, 0, width_px, max(0, int(round(root_top))))
+                else:
+                    start_y = root_bottom - row_hs[i]
+                    clip_box = (0, min(height_px, int(round(root_bottom))), width_px, height_px)
+
+                curr_row_y = start_y + (rest_ys[i] - start_y) * p
+                layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
+                ldraw = ImageDraw.Draw(layer)
+                rfont = ImageFont.truetype(font_path, sizes[i])
+                ldraw.text(
+                    (pad_px, curr_row_y - top_offsets[i]),
+                    rows[i],
+                    font=rfont,
+                    fill=(*base_colors[i], 255),
+                )
+                if clip_box[3] > clip_box[1]:
+                    cropped = layer.crop(clip_box)
+                    img.paste(cropped, (0, clip_box[1]), cropped)
+
+            # Draw the still root row on top
+            draw = ImageDraw.Draw(img)
+            draw.text(
+                (pad_px, root_top - top_offsets[root_idx]),
+                rows[root_idx],
+                font=root_font,
+                fill=base_colors[root_idx],
+            )
+            if out_scale > 1:
+                img = img.resize(target_size, Image.Resampling.LANCZOS)
+            frames.append(img.convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
+
+        duration_ms = max(20, int(round(1000 / fps)))
+        frames[0].save(
+            out_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=True,
+        )
+        return
+
     for f in range(frames_count):
         t = f / frames_count  # 0.0 .. <1.0
         phase = 2.0 * math.pi * t
@@ -278,7 +367,7 @@ def main() -> int:
     parser.add_argument(
         "--anim-style",
         default="kinetic",
-        choices=["kinetic", "wave", "pulse", "rainbow-shift", "cascade"],
+        choices=["kinetic", "emerge", "wave", "pulse", "rainbow-shift", "cascade"],
         help="Animation style when --animate is enabled",
     )
     parser.add_argument("--frames", type=int, default=48, help="Number of frames for animated GIF")
