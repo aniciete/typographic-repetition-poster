@@ -163,7 +163,7 @@ def render_animated_gif(
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
     if anim_style == "emerge":
-        # Precompute resting row layout; root stays still while outer rows emerge and clip on the root
+        # Endless waterfall radiating continuously outward from a still root, clipped on the root
         curr_y = pad_px * 0.5
         rest_ys: list[float] = []
         row_hs: list[float] = []
@@ -180,53 +180,65 @@ def render_animated_gif(
         root_bottom = root_top + row_hs[root_idx]
         base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
         root_font = ImageFont.truetype(font_path, sizes[root_idx])
+        row_fonts = [ImageFont.truetype(font_path, s) for s in sizes]
+
+        # Build ordered cycles from closest-to-root outward
+        upper_indices = list(range(root_idx - 1, -1, -1))
+        lower_indices = list(range(root_idx + 1, n_rows))
+
+        def build_cycle(indices: list[int]) -> tuple[list[tuple[int, float]], float]:
+            items: list[tuple[int, float]] = []
+            offset = 0.0
+            for idx in indices:
+                items.append((idx, offset))
+                offset += row_hs[idx] + gap_px
+            return items, max(1.0, offset)
+
+        upper_cycle, upper_cycle_h = build_cycle(upper_indices)
+        lower_cycle, lower_cycle_h = build_cycle(lower_indices)
+        upper_clip = (0, 0, width_px, max(0, int(round(root_top))))
+        lower_clip = (0, min(height_px, int(round(root_bottom))), width_px, height_px)
 
         for f in range(frames_count):
             t = f / frames_count
-            # 0.00-0.42: emerge out, 0.42-0.58: hold full, 0.58-0.96: retract in, 0.96-1.00: hold root
-            if t < 0.42:
-                raw_p = t / 0.42
-                p_global = 1.0 - (1.0 - raw_p) ** 3
-            elif t < 0.58:
-                p_global = 1.0
-            elif t < 0.96:
-                raw_p = (t - 0.58) / 0.38
-                p_global = 1.0 - (raw_p ** 3)
-            else:
-                p_global = 0.0
-
             img = Image.new("RGB", (width_px, height_px), paper)
 
-            for i in range(n_rows):
-                if i == root_idx:
-                    continue
-                dist = abs(i - root_idx)
-                # Subtle stagger: inner rows lead slightly out of the root
-                stagger = (dist - 1) * 0.08
-                p = max(0.0, min(1.0, (p_global - stagger) / max(0.01, 1.0 - stagger * (n_rows // 2))))
-                if p <= 0.0:
-                    continue
-
-                if i < root_idx:
-                    start_y = root_top
-                    clip_box = (0, 0, width_px, max(0, int(round(root_top))))
-                else:
-                    start_y = root_bottom - row_hs[i]
-                    clip_box = (0, min(height_px, int(round(root_bottom))), width_px, height_px)
-
-                curr_row_y = start_y + (rest_ys[i] - start_y) * p
+            if upper_indices and upper_clip[3] > upper_clip[1]:
                 layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
                 ldraw = ImageDraw.Draw(layer)
-                rfont = ImageFont.truetype(font_path, sizes[i])
-                ldraw.text(
-                    (pad_px, curr_row_y - top_offsets[i]),
-                    rows[i],
-                    font=rfont,
-                    fill=(*base_colors[i], 255),
-                )
-                if clip_box[3] > clip_box[1]:
-                    cropped = layer.crop(clip_box)
-                    img.paste(cropped, (0, clip_box[1]), cropped)
+                shift = t * upper_cycle_h
+                max_k = int(math.ceil(root_top / upper_cycle_h)) + 1
+                for k in range(-1, max_k + 1):
+                    for idx, local_d in upper_cycle:
+                        bottom_y = root_top - (k * upper_cycle_h + local_d + shift)
+                        y_pos = bottom_y - row_hs[idx]
+                        if y_pos + row_hs[idx] > 0 and y_pos < root_top:
+                            ldraw.text(
+                                (pad_px, y_pos - top_offsets[idx]),
+                                rows[idx],
+                                font=row_fonts[idx],
+                                fill=(*base_colors[idx], 255),
+                            )
+                cropped = layer.crop(upper_clip)
+                img.paste(cropped, (0, upper_clip[1]), cropped)
+
+            if lower_indices and lower_clip[3] > lower_clip[1]:
+                layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
+                ldraw = ImageDraw.Draw(layer)
+                shift = t * lower_cycle_h
+                max_k = int(math.ceil((height_px - root_bottom) / lower_cycle_h)) + 1
+                for k in range(-1, max_k + 1):
+                    for idx, local_d in lower_cycle:
+                        y_pos = root_bottom + (k * lower_cycle_h + local_d + shift)
+                        if y_pos + row_hs[idx] > root_bottom and y_pos < height_px:
+                            ldraw.text(
+                                (pad_px, y_pos - top_offsets[idx]),
+                                rows[idx],
+                                font=row_fonts[idx],
+                                fill=(*base_colors[idx], 255),
+                            )
+                cropped = layer.crop(lower_clip)
+                img.paste(cropped, (0, lower_clip[1]), cropped)
 
             # Draw the still root row on top
             draw = ImageDraw.Draw(img)
