@@ -186,16 +186,18 @@ def render_animated_gif(
 
         for f in range(frames_count):
             t = f / frames_count
-            shift = t * cycle_h
+            # Fast initially (u=0), slow in the middle (u=0.5), fast again near the root (u=1)
+            eased_t = t + 0.12 * math.sin(2.0 * math.pi * t)
+            shift = eased_t * cycle_h
             img = Image.new("RGB", (width_px, height_px), paper)
 
-            # Upper window: full-size root word scrolls continuously upward out of the root
+            # Upper window: copies scroll continuously DOWNWARD (inward) toward the root
             if upper_clip[3] > upper_clip[1]:
                 layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
                 ldraw = ImageDraw.Draw(layer)
                 max_k = int(math.ceil((root_bottom + cycle_h) / cycle_h)) + 1
-                for k in range(-1, max_k + 1):
-                    y_pos = root_top - (k * cycle_h + shift)
+                for k in range(0, max_k + 2):
+                    y_pos = root_top - k * cycle_h + shift
                     if y_pos + root_h > top_edge and y_pos < upper_end:
                         ldraw.text(
                             (pad_px, y_pos - root_top_off),
@@ -206,13 +208,13 @@ def render_animated_gif(
                 cropped = layer.crop(upper_clip)
                 img.paste(cropped, (0, upper_clip[1]), cropped)
 
-            # Lower window: full-size root word scrolls continuously downward out of the root
+            # Lower window: copies scroll continuously UPWARD (inward) toward the root
             if lower_clip[3] > lower_clip[1]:
                 layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
                 ldraw = ImageDraw.Draw(layer)
                 max_k = int(math.ceil((height_px - root_top + cycle_h) / cycle_h)) + 1
-                for k in range(-1, max_k + 1):
-                    y_pos = root_top + (k * cycle_h + shift)
+                for k in range(0, max_k + 2):
+                    y_pos = root_top + k * cycle_h - shift
                     if y_pos + root_h > lower_start and y_pos < bottom_edge:
                         ldraw.text(
                             (pad_px, y_pos - root_top_off),
