@@ -120,18 +120,45 @@ def compute_colors(mode: str, count: int, ink: tuple[int, int, int],
     return [ink] * count
 
 
+def render_exact_row(
+    font_path: str,
+    text: str,
+    size: int,
+    target_w: int,
+    color: tuple[int, int, int],
+) -> Image.Image:
+    """Render text tight-cropped and scaled to exact target_w pixels wide."""
+    font = ImageFont.truetype(font_path, size)
+    bbox = font.getbbox(text)  # (left, top, right, bottom)
+    w = max(1, bbox[2] - bbox[0])
+    h = max(1, bbox[3] - bbox[1])
+    tile = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    tdraw = ImageDraw.Draw(tile)
+    tdraw.text((-bbox[0], -bbox[1]), text, font=font, fill=(*color, 255))
+    if w != target_w and target_w > 0:
+        tile = tile.resize((target_w, h), Image.Resampling.LANCZOS)
+    return tile
+
+
 def draw_stack(draw: ImageDraw.ImageDraw, font_path: str, rows: list[str],
                sizes: list[int], x: float, y: float, tight: bool,
                gap: float, mode: str, colors: list[tuple[int, int, int]],
                x_offsets: list[float] | None = None,
-               y_offsets: list[float] | None = None):
+               y_offsets: list[float] | None = None,
+               exact_w: int = 0,
+               base_img: Image.Image | None = None):
     curr_y = y
     for i, (text, size, color) in enumerate(zip(rows, sizes, colors)):
-        font = ImageFont.truetype(font_path, size)
         top_offset, h = row_metrics(font_path, "Hg", size, tight)
         dx = x_offsets[i] if x_offsets else 0.0
         dy = y_offsets[i] if y_offsets else 0.0
-        draw.text((x + dx, curr_y - top_offset + dy), text, font=font, fill=color)
+        if exact_w > 0 and base_img is not None:
+            tile = render_exact_row(font_path, text, size, exact_w, color)
+            paste_y = int(round(curr_y + (h - tile.height) / 2.0 + dy)) if not tight else int(round(curr_y + dy))
+            base_img.paste(tile, (int(round(x + dx)), paste_y), tile)
+        else:
+            font = ImageFont.truetype(font_path, size)
+            draw.text((x + dx, curr_y - top_offset + dy), text, font=font, fill=color)
         curr_y += h + gap
 
 
@@ -163,76 +190,73 @@ def render_animated_gif(
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
     if anim_style == "emerge":
-        # Endless waterfall radiating symmetrically from a still root through equal top/bottom clip windows
+        # Two clipped sliding instances per side moving inward toward a still root (1975 reference style)
         root_idx = n_rows // 2
         root_text = rows[root_idx]
-        root_font = ImageFont.truetype(font_path, sizes[root_idx])
-        root_top_off, root_h = row_metrics(font_path, root_text, sizes[root_idx], tight)
+        exact_w = max(1, int(round(width_px - 2 * pad_px)))
+        root_tile = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, (255, 255, 255))
+        root_h = root_tile.height
         base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
 
-        # Center the root vertically so upper and lower clip windows are pixel-symmetrical
-        center_y = height_px / 2.0
-        root_top = center_y - root_h / 2.0
-        root_bottom = center_y + root_h / 2.0
+        # Two symmetrical bands per side: inner (~45% root_h) and outer (~30% root_h), separated by gap_px
+        band1_h = max(1, int(round(0.45 * root_h)))
+        band2_h = max(1, int(round(0.30 * root_h)))
+        gap_i = max(1, int(round(gap_px)))
+        total_emerge_h = root_h + 2 * (band1_h + band2_h + 2 * gap_i) + int(round(pad_px))
+        # Ensure canvas fits both bands symmetrically around the centered root
+        canvas_h = max(height_px, total_emerge_h)
+        target_size = (max(1, width_px // out_scale), max(1, canvas_h // out_scale))
 
-        top_edge = max(0, int(round(pad_px * 0.5)))
-        bottom_edge = min(height_px, int(round(height_px - pad_px * 0.5)))
-        upper_end = max(top_edge, int(round(root_top - gap_px)))
-        lower_start = min(bottom_edge, int(round(root_bottom + gap_px)))
+        center_y = canvas_h / 2.0
+        root_top = int(round(center_y - root_h / 2.0))
+        root_bot = root_top + root_h
 
-        upper_clip = (0, top_edge, width_px, upper_end)
-        lower_clip = (0, lower_start, width_px, bottom_edge)
-        cycle_h = max(1.0, root_h + gap_px)
+        up_b1_bot = root_top - gap_i
+        up_b1_top = up_b1_bot - band1_h
+        up_b2_bot = up_b1_top - gap_i
+        up_b2_top = up_b2_bot - band2_h
+
+        dn_b1_top = root_bot + gap_i
+        dn_b1_bot = dn_b1_top + band1_h
+        dn_b2_top = dn_b1_bot + gap_i
+        dn_b2_bot = dn_b2_top + band2_h
+
+        root_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[root_idx])
+        upper_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[0])
+        lower_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[-1])
+        pad_x = int(round(pad_px))
 
         for f in range(frames_count):
             t = f / frames_count
-            # Fast initially (u=0), slow in the middle (u=0.5), fast again near the root (u=1)
-            eased_t = t + 0.12 * math.sin(2.0 * math.pi * t)
-            shift = eased_t * cycle_h
-            img = Image.new("RGB", (width_px, height_px), paper)
+            # Gentle fast -> slow -> fast easing (seamless loop)
+            eased_t = t + 0.055 * math.sin(2.0 * math.pi * t)
+            img = Image.new("RGB", (width_px, canvas_h), paper)
 
-            # Upper window: copies scroll continuously DOWNWARD (inward) toward the root
-            if upper_clip[3] > upper_clip[1]:
-                layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
-                ldraw = ImageDraw.Draw(layer)
-                max_k = int(math.ceil((root_bottom + cycle_h) / cycle_h)) + 1
-                for k in range(0, max_k + 2):
-                    y_pos = root_top - k * cycle_h + shift
-                    if y_pos + root_h > top_edge and y_pos < upper_end:
-                        ldraw.text(
-                            (pad_px, y_pos - root_top_off),
-                            root_text,
-                            font=root_font,
-                            fill=(*base_colors[0], 255),
-                        )
-                cropped = layer.crop(upper_clip)
-                img.paste(cropped, (0, upper_clip[1]), cropped)
+            def paste_clipped(tile: Image.Image, y_pos: float, clip_top: int, clip_bot: int):
+                y0 = int(round(y_pos))
+                y1 = y0 + tile.height
+                vis_top = max(clip_top, y0)
+                vis_bot = min(clip_bot, y1)
+                if vis_bot > vis_top:
+                    crop_box = (0, vis_top - y0, tile.width, vis_bot - y0)
+                    img.paste(tile.crop(crop_box), (pad_x, vis_top), tile.crop(crop_box))
 
-            # Lower window: copies scroll continuously UPWARD (inward) toward the root
-            if lower_clip[3] > lower_clip[1]:
-                layer = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
-                ldraw = ImageDraw.Draw(layer)
-                max_k = int(math.ceil((height_px - root_top + cycle_h) / cycle_h)) + 1
-                for k in range(0, max_k + 2):
-                    y_pos = root_top + k * cycle_h - shift
-                    if y_pos + root_h > lower_start and y_pos < bottom_edge:
-                        ldraw.text(
-                            (pad_px, y_pos - root_top_off),
-                            root_text,
-                            font=root_font,
-                            fill=(*base_colors[-1], 255),
-                        )
-                cropped = layer.crop(lower_clip)
-                img.paste(cropped, (0, lower_clip[1]), cropped)
+            # Upper Band 1 (inner) & Band 2 (outer): each slides DOWNWARD into the next boundary
+            t_b2 = (eased_t + 0.15) % 1.0
+            up_b1_y = (up_b1_top - root_h) + eased_t * (up_b1_bot - (up_b1_top - root_h))
+            up_b2_y = (up_b2_top - root_h) + t_b2 * (up_b2_bot - (up_b2_top - root_h))
+            paste_clipped(upper_colored, up_b1_y, max(0, up_b1_top), max(0, up_b1_bot))
+            paste_clipped(upper_colored, up_b2_y, max(0, up_b2_top), max(0, up_b2_bot))
 
-            # Draw the still root row on top
-            draw = ImageDraw.Draw(img)
-            draw.text(
-                (pad_px, root_top - root_top_off),
-                root_text,
-                font=root_font,
-                fill=base_colors[root_idx],
-            )
+            # Lower Band 1 (inner) & Band 2 (outer): each slides UPWARD into the next boundary
+            dn_b1_y = dn_b1_top - eased_t * (dn_b1_top - (dn_b1_top - root_h))
+            dn_b2_y = dn_b2_top - t_b2 * (dn_b2_top - (dn_b2_top - root_h))
+            paste_clipped(lower_colored, dn_b1_y, min(canvas_h, dn_b1_top), min(canvas_h, dn_b1_bot))
+            paste_clipped(lower_colored, dn_b2_y, min(canvas_h, dn_b2_top), min(canvas_h, dn_b2_bot))
+
+            # Still root on top
+            img.paste(root_colored, (pad_x, root_top), root_colored)
+
             if out_scale > 1:
                 img = img.resize(target_size, Image.Resampling.LANCZOS)
             frames.append(img.convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
@@ -326,6 +350,8 @@ def render_animated_gif(
             frame_colors,
             x_offsets=x_offsets,
             y_offsets=y_offsets,
+            exact_w=max(1, int(round(width_px - 2 * pad_px))) if anim_style != "pulse" else 0,
+            base_img=img,
         )
         if out_scale > 1:
             img = img.resize(target_size, Image.Resampling.LANCZOS)
@@ -345,7 +371,7 @@ def render_animated_gif(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate a typographic repetition poster.")
     parser.add_argument("word", help="Word or phrase to repeat")
-    parser.add_argument("--reps", default="42124", help="Row repetition pattern (e.g. 42124 or 4,2,1,2,4)")
+    parser.add_argument("--reps", default="8,4,2,1,2,4,8", help="Row repetition pattern (e.g. 8,4,2,1,2,4,8 or 42124)")
     parser.add_argument("--font", default="sans", choices=list(FONT_CANDIDATES.keys()))
     parser.add_argument("--font-path", default="", help="Custom path to a .ttf/.ttc/.otf font file")
     parser.add_argument("--upper", action="store_true", help="Convert phrase to uppercase")
@@ -432,7 +458,8 @@ def main() -> int:
         img = Image.new("RGB", (W * k, H * k), paper)
         draw = ImageDraw.Draw(img)
         draw_stack(draw, font_path, rows, sizes, args.pad * k, 0.0,
-                   args.tight, gap, args.mode, colors)
+                   args.tight, gap, args.mode, colors,
+                   exact_w=int(round(target_w)), base_img=img)
         img.save(out_path, "PNG")
 
     # ---- report (poster px, i.e. render px / k) ----
