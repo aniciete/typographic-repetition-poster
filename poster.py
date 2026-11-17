@@ -157,6 +157,9 @@ def render_animated_gif(
 ):
     frames: list[Image.Image] = []
     n_rows = len(rows)
+    center = (n_rows - 1) / 2.0
+    max_dist = max(1.0, center)
+    phase_step = 2.0 * math.pi / max(2.0, center + 1.0)
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
     for f in range(frames_count):
@@ -171,12 +174,12 @@ def render_animated_gif(
         frame_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
 
         if anim_style == "kinetic":
-            # Smooth phase-shifted glide + subtle breathing scale + accent wave
+            # Radiates symmetrically from the center row outward
             for i in range(n_rows):
-                row_phase = phase - i * (2.0 * math.pi / max(2, n_rows))
-                s_val = math.sin(row_phase)
-                x_offsets[i] = s_val * (pad_px * 0.30)
-                scale = 1.0 + 0.025 * math.cos(row_phase)
+                dist = abs(i - center)
+                row_phase = phase - dist * phase_step
+                x_offsets[i] = math.sin(row_phase) * (pad_px * 0.30)
+                scale = 1.0 + 0.03 * math.cos(row_phase)
                 frame_sizes[i] = max(1, int(round(sizes[i] * scale)))
                 base_w = ImageFont.truetype(font_path, sizes[i]).getlength(rows[i])
                 new_w = ImageFont.truetype(font_path, frame_sizes[i]).getlength(rows[i])
@@ -188,25 +191,33 @@ def render_animated_gif(
                         for c in range(3)
                     )
                 elif color_mode == "rainbow":
-                    frame_colors = compute_colors("rainbow", n_rows, ink, accent, t)
+                    hue = ((260 / 360 * (dist / max_dist)) - t) % 1.0
+                    frame_colors[i] = tuple(int(v * 255) for v in colorsys.hsv_to_rgb(hue, 0.85, 0.62))
         elif anim_style == "wave":
             for i in range(n_rows):
-                row_phase = phase - i * (2.0 * math.pi / max(2, n_rows))
+                dist = abs(i - center)
+                sign = 0.0 if i == center else (1.0 if i > center else -1.0)
+                row_phase = phase - dist * phase_step
                 x_offsets[i] = math.sin(row_phase) * (pad_px * 0.35)
-                y_offsets[i] = math.cos(row_phase) * (gap_px * 0.28)
+                y_offsets[i] = sign * math.cos(row_phase) * (gap_px * 0.25)
         elif anim_style == "pulse":
             for i in range(n_rows):
-                row_phase = phase - i * 0.65
+                dist = abs(i - center)
+                row_phase = phase - dist * 0.85
                 scale = 1.0 + 0.045 * math.sin(row_phase)
                 frame_sizes[i] = max(1, int(round(sizes[i] * scale)))
                 base_w = ImageFont.truetype(font_path, sizes[i]).getlength(rows[i])
                 new_w = ImageFont.truetype(font_path, frame_sizes[i]).getlength(rows[i])
                 x_offsets[i] = (base_w - new_w) / 2.0
         elif anim_style == "rainbow-shift":
-            frame_colors = compute_colors("rainbow", n_rows, ink, accent, t)
+            for i in range(n_rows):
+                dist = abs(i - center)
+                hue = ((260 / 360 * (dist / max_dist)) - t) % 1.0
+                frame_colors[i] = tuple(int(v * 255) for v in colorsys.hsv_to_rgb(hue, 0.85, 0.62))
         elif anim_style == "cascade":
             for i in range(n_rows):
-                row_t = (t - i * (0.5 / max(1, n_rows))) % 1.0
+                dist = abs(i - center)
+                row_t = (t - dist * (0.35 / max(1.0, center + 1.0))) % 1.0
                 if row_t < 0.25:
                     p = row_t / 0.25
                     ease = 1.0 - (1.0 - p) ** 3
