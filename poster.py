@@ -217,8 +217,8 @@ def render_animated_gif(
         pad_x = int(round(pad_px))
 
         def progress(u: float) -> float:
-            # Gentle fast -> slow -> fast inward flow (velocity in [0.62, 1.38], never stalls/bounces)
-            return u + (0.38 / (2.0 * math.pi)) * math.sin(2.0 * math.pi * u)
+            # Gentle fast -> slow -> fast inward flow (velocity in [0.78, 1.22], no stall or pause)
+            return u + (0.22 / (2.0 * math.pi)) * math.sin(2.0 * math.pi * u)
 
         def paste_clipped_y(dst: Image.Image, tile: Image.Image, y_pos: int, clip_top: int, clip_bot: int):
             vis_top = max(clip_top, y_pos)
@@ -227,32 +227,44 @@ def render_animated_gif(
                 piece = tile.crop((0, vis_top - y_pos, tile.width, vis_bot - y_pos))
                 dst.paste(piece, (pad_x, vis_top), piece)
 
+        d_end = float(gap_i)
+        span = max(1.0, float(d_max) - d_end)
+
         for f in range(frames_count):
             t = f / frames_count
             # Two active sliding instances per side spaced half a travel apart,
             # plus a backmost card anchored at d_max that uncovers smoothly behind the outer one.
             u_outer = 0.5 * t
             u_inner = 0.5 * t + 0.5
-            d_outer = d_max * (1.0 - progress(u_outer))
-            d_inner = d_max * (1.0 - progress(u_inner))
+            d_outer = d_max - span * progress(u_outer)
+            d_inner = d_max - span * progress(u_inner)
             layers_d = [float(d_max), d_outer, d_inner]
 
             img = Image.new("RGB", (width_px, canvas_h), paper)
             draw = ImageDraw.Draw(img)
 
+            def layer_gap(idx: int, d: float) -> int:
+                if idx == 0:
+                    return gap_i
+                g_out = min(gap_i, int(round(0.5 * max(0.0, d_max - d)))) if idx == 1 else gap_i
+                g_in = min(gap_i, int(round(max(0.0, d - d_end))))
+                return min(g_out, g_in)
+
             # Upper echoes (back to front): only tops of the word ever show, sliding downward into root
-            for d in layers_d:
+            for idx, d in enumerate(layers_d):
+                eff_gap = layer_gap(idx, d)
                 y_top = root_top - int(round(d))
-                mask_top = max(0, y_top - gap_i)
+                mask_top = max(0, y_top - eff_gap)
                 if root_top > mask_top:
                     draw.rectangle([0, mask_top, width_px, root_top], fill=paper)
                 paste_clipped_y(img, upper_colored, y_top, 0, root_top)
 
             # Lower echoes (back to front): exact vertical mirror, only bottoms ever show, sliding upward
-            for d in layers_d:
+            for idx, d in enumerate(layers_d):
+                eff_gap = layer_gap(idx, d)
                 y_bot = root_bot + int(round(d))
                 y_top = y_bot - root_h
-                mask_bot = min(canvas_h, y_bot + gap_i)
+                mask_bot = min(canvas_h, y_bot + eff_gap)
                 if mask_bot > root_bot:
                     draw.rectangle([0, root_bot, width_px, mask_bot], fill=paper)
                 paste_clipped_y(img, lower_colored, y_top, root_bot, canvas_h)
