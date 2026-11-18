@@ -226,10 +226,16 @@ def render_animated_gif(
         lower_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[-1])
         pad_x = int(round(pad_px))
 
+        cycle_h = float(root_h + gap_i)
+
         for f in range(frames_count):
             t = f / frames_count
-            # Gentle fast -> slow -> fast easing (seamless loop)
-            eased_t = t + 0.055 * math.sin(2.0 * math.pi * t)
+            # Gentle fast -> slow -> fast easing (seamless periodic flow)
+            eased_t1 = t + 0.055 * math.sin(2.0 * math.pi * t)
+            t2 = (t + 0.15) % 1.0
+            eased_t2 = t2 + 0.055 * math.sin(2.0 * math.pi * t2)
+            shift1 = eased_t1 * cycle_h
+            shift2 = eased_t2 * cycle_h
             img = Image.new("RGB", (width_px, canvas_h), paper)
 
             def paste_clipped(tile: Image.Image, y_pos: float, clip_top: int, clip_bot: int):
@@ -241,18 +247,15 @@ def render_animated_gif(
                     crop_box = (0, vis_top - y0, tile.width, vis_bot - y0)
                     img.paste(tile.crop(crop_box), (pad_x, vis_top), tile.crop(crop_box))
 
-            # Upper Band 1 (inner) & Band 2 (outer): each slides DOWNWARD into the next boundary
-            t_b2 = (eased_t + 0.15) % 1.0
-            up_b1_y = (up_b1_top - root_h) + eased_t * (up_b1_bot - (up_b1_top - root_h))
-            up_b2_y = (up_b2_top - root_h) + t_b2 * (up_b2_bot - (up_b2_top - root_h))
-            paste_clipped(upper_colored, up_b1_y, max(0, up_b1_top), max(0, up_b1_bot))
-            paste_clipped(upper_colored, up_b2_y, max(0, up_b2_top), max(0, up_b2_bot))
+            # Upper Band 1 (inner) & Band 2 (outer): continuous inward (downward) stream
+            for k in range(-1, 3):
+                paste_clipped(upper_colored, up_b1_bot - k * cycle_h + shift1, max(0, up_b1_top), max(0, up_b1_bot))
+                paste_clipped(upper_colored, up_b2_bot - k * cycle_h + shift2, max(0, up_b2_top), max(0, up_b2_bot))
 
-            # Lower Band 1 (inner) & Band 2 (outer): each slides UPWARD into the next boundary
-            dn_b1_y = dn_b1_top - eased_t * (dn_b1_top - (dn_b1_top - root_h))
-            dn_b2_y = dn_b2_top - t_b2 * (dn_b2_top - (dn_b2_top - root_h))
-            paste_clipped(lower_colored, dn_b1_y, min(canvas_h, dn_b1_top), min(canvas_h, dn_b1_bot))
-            paste_clipped(lower_colored, dn_b2_y, min(canvas_h, dn_b2_top), min(canvas_h, dn_b2_bot))
+            # Lower Band 1 (inner) & Band 2 (outer): continuous inward (upward) stream
+            for k in range(-1, 3):
+                paste_clipped(lower_colored, dn_b1_top - root_h + k * cycle_h - shift1, min(canvas_h, dn_b1_top), min(canvas_h, dn_b1_bot))
+                paste_clipped(lower_colored, dn_b2_top - root_h + k * cycle_h - shift2, min(canvas_h, dn_b2_top), min(canvas_h, dn_b2_bot))
 
             # Still root on top
             img.paste(root_colored, (pad_x, root_top), root_colored)
