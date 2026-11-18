@@ -226,16 +226,18 @@ def render_animated_gif(
         lower_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[-1])
         pad_x = int(round(pad_px))
 
-        cycle_h = float(root_h + gap_i)
+        # Per-band period: one word fully passes through its window before the next enters
+        cyc1 = float(root_h + band1_h)
+        cyc2 = float(root_h + band2_h)
+
+        def ease(u: float) -> float:
+            u = u % 1.0
+            return u + 0.05 * math.sin(2.0 * math.pi * u)
 
         for f in range(frames_count):
             t = f / frames_count
-            # Gentle fast -> slow -> fast easing (seamless periodic flow)
-            eased_t1 = t + 0.055 * math.sin(2.0 * math.pi * t)
-            t2 = (t + 0.15) % 1.0
-            eased_t2 = t2 + 0.055 * math.sin(2.0 * math.pi * t2)
-            shift1 = eased_t1 * cycle_h
-            shift2 = eased_t2 * cycle_h
+            s1 = ease(t) * cyc1
+            s2 = ease(t + 0.5) * cyc2
             img = Image.new("RGB", (width_px, canvas_h), paper)
 
             def paste_clipped(tile: Image.Image, y_pos: float, clip_top: int, clip_bot: int):
@@ -245,17 +247,17 @@ def render_animated_gif(
                 vis_bot = min(clip_bot, y1)
                 if vis_bot > vis_top:
                     crop_box = (0, vis_top - y0, tile.width, vis_bot - y0)
-                    img.paste(tile.crop(crop_box), (pad_x, vis_top), tile.crop(crop_box))
+                    piece = tile.crop(crop_box)
+                    img.paste(piece, (pad_x, vis_top), piece)
 
-            # Upper Band 1 (inner) & Band 2 (outer): continuous inward (downward) stream
+            # Upper bands: words fall downward into the root, top edge enters first
             for k in range(-1, 3):
-                paste_clipped(upper_colored, up_b1_bot - k * cycle_h + shift1, max(0, up_b1_top), max(0, up_b1_bot))
-                paste_clipped(upper_colored, up_b2_bot - k * cycle_h + shift2, max(0, up_b2_top), max(0, up_b2_bot))
-
-            # Lower Band 1 (inner) & Band 2 (outer): continuous inward (upward) stream
+                paste_clipped(upper_colored, up_b1_top - root_h - k * cyc1 + s1, up_b1_top, up_b1_bot)
+                paste_clipped(upper_colored, up_b2_top - root_h - k * cyc2 + s2, up_b2_top, up_b2_bot)
+            # Lower bands: words rise upward into the root
             for k in range(-1, 3):
-                paste_clipped(lower_colored, dn_b1_top - root_h + k * cycle_h - shift1, min(canvas_h, dn_b1_top), min(canvas_h, dn_b1_bot))
-                paste_clipped(lower_colored, dn_b2_top - root_h + k * cycle_h - shift2, min(canvas_h, dn_b2_top), min(canvas_h, dn_b2_bot))
+                paste_clipped(lower_colored, dn_b1_bot + k * cyc1 - s1, dn_b1_top, dn_b1_bot)
+                paste_clipped(lower_colored, dn_b2_bot + k * cyc2 - s2, dn_b2_top, dn_b2_bot)
 
             # Still root on top
             img.paste(root_colored, (pad_x, root_top), root_colored)
