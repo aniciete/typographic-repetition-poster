@@ -190,7 +190,8 @@ def render_animated_gif(
     target_size = (max(1, width_px // out_scale), max(1, height_px // out_scale))
 
     if anim_style == "emerge":
-        # Two clipped sliding instances per side moving inward toward a still root (1975 reference style)
+        # Stacked-layer occlusion: 2 sliding copies per side + 1 backmost anchor moving
+        # continuously inward into a static center root (1975 / MFC reference style).
         root_idx = n_rows // 2
         root_text = rows[root_idx]
         exact_w = max(1, int(round(width_px - 2 * pad_px)))
@@ -198,12 +199,11 @@ def render_animated_gif(
         root_h = root_tile.height
         base_colors = compute_colors(color_mode, n_rows, ink, accent, 0.0)
 
-        # Two symmetrical bands per side: inner (~45% root_h) and outer (~30% root_h), separated by gap_px
-        band1_h = max(1, int(round(0.45 * root_h)))
-        band2_h = max(1, int(round(0.30 * root_h)))
         gap_i = max(1, int(round(gap_px)))
-        total_emerge_h = root_h + 2 * (band1_h + band2_h + 2 * gap_i) + int(round(pad_px))
-        # Ensure canvas fits both bands symmetrically around the centered root
+        # Total echo stack extent above and below the center root (~78% of root_h, matching reference)
+        d_max = max(gap_i * 4, int(round(0.78 * root_h)))
+        pad_y = int(round(pad_px))
+        total_emerge_h = root_h + 2 * d_max + 2 * pad_y
         canvas_h = max(height_px, total_emerge_h)
         target_size = (max(1, width_px // out_scale), max(1, canvas_h // out_scale))
 
@@ -211,55 +211,54 @@ def render_animated_gif(
         root_top = int(round(center_y - root_h / 2.0))
         root_bot = root_top + root_h
 
-        up_b1_bot = root_top - gap_i
-        up_b1_top = up_b1_bot - band1_h
-        up_b2_bot = up_b1_top - gap_i
-        up_b2_top = up_b2_bot - band2_h
-
-        dn_b1_top = root_bot + gap_i
-        dn_b1_bot = dn_b1_top + band1_h
-        dn_b2_top = dn_b1_bot + gap_i
-        dn_b2_bot = dn_b2_top + band2_h
-
         root_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[root_idx])
         upper_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[0])
         lower_colored = render_exact_row(font_path, root_text, sizes[root_idx], exact_w, base_colors[-1])
         pad_x = int(round(pad_px))
 
-        # Per-band period: one word fully passes through its window before the next enters
-        cyc1 = float(root_h + band1_h)
-        cyc2 = float(root_h + band2_h)
+        def progress(u: float) -> float:
+            # Gentle fast -> slow -> fast inward flow (velocity in [0.62, 1.38], never stalls/bounces)
+            return u + (0.38 / (2.0 * math.pi)) * math.sin(2.0 * math.pi * u)
 
-        def ease(u: float) -> float:
-            u = u % 1.0
-            return u + 0.05 * math.sin(2.0 * math.pi * u)
+        def paste_clipped_y(dst: Image.Image, tile: Image.Image, y_pos: int, clip_top: int, clip_bot: int):
+            vis_top = max(clip_top, y_pos)
+            vis_bot = min(clip_bot, y_pos + tile.height)
+            if vis_bot > vis_top:
+                piece = tile.crop((0, vis_top - y_pos, tile.width, vis_bot - y_pos))
+                dst.paste(piece, (pad_x, vis_top), piece)
 
         for f in range(frames_count):
             t = f / frames_count
-            s1 = ease(t) * cyc1
-            s2 = ease(t + 0.5) * cyc2
+            # Two active sliding instances per side spaced half a travel apart,
+            # plus a backmost card anchored at d_max that uncovers smoothly behind the outer one.
+            u_outer = 0.5 * t
+            u_inner = 0.5 * t + 0.5
+            d_outer = d_max * (1.0 - progress(u_outer))
+            d_inner = d_max * (1.0 - progress(u_inner))
+            layers_d = [float(d_max), d_outer, d_inner]
+
             img = Image.new("RGB", (width_px, canvas_h), paper)
+            draw = ImageDraw.Draw(img)
 
-            def paste_clipped(tile: Image.Image, y_pos: float, clip_top: int, clip_bot: int):
-                y0 = int(round(y_pos))
-                y1 = y0 + tile.height
-                vis_top = max(clip_top, y0)
-                vis_bot = min(clip_bot, y1)
-                if vis_bot > vis_top:
-                    crop_box = (0, vis_top - y0, tile.width, vis_bot - y0)
-                    piece = tile.crop(crop_box)
-                    img.paste(piece, (pad_x, vis_top), piece)
+            # Upper echoes (back to front): only tops of the word ever show, sliding downward into root
+            for d in layers_d:
+                y_top = root_top - int(round(d))
+                mask_top = max(0, y_top - gap_i)
+                if root_top > mask_top:
+                    draw.rectangle([0, mask_top, width_px, root_top], fill=paper)
+                paste_clipped_y(img, upper_colored, y_top, 0, root_top)
 
-            # Upper bands: words fall downward into the root, top edge enters first
-            for k in range(-1, 3):
-                paste_clipped(upper_colored, up_b1_top - root_h - k * cyc1 + s1, up_b1_top, up_b1_bot)
-                paste_clipped(upper_colored, up_b2_top - root_h - k * cyc2 + s2, up_b2_top, up_b2_bot)
-            # Lower bands: words rise upward into the root
-            for k in range(-1, 3):
-                paste_clipped(lower_colored, dn_b1_bot + k * cyc1 - s1, dn_b1_top, dn_b1_bot)
-                paste_clipped(lower_colored, dn_b2_bot + k * cyc2 - s2, dn_b2_top, dn_b2_bot)
+            # Lower echoes (back to front): exact vertical mirror, only bottoms ever show, sliding upward
+            for d in layers_d:
+                y_bot = root_bot + int(round(d))
+                y_top = y_bot - root_h
+                mask_bot = min(canvas_h, y_bot + gap_i)
+                if mask_bot > root_bot:
+                    draw.rectangle([0, root_bot, width_px, mask_bot], fill=paper)
+                paste_clipped_y(img, lower_colored, y_top, root_bot, canvas_h)
 
-            # Still root on top
+            # Static center root on top with symmetrical gap mask above and below
+            draw.rectangle([0, max(0, root_top - gap_i), width_px, min(canvas_h, root_bot + gap_i)], fill=paper)
             img.paste(root_colored, (pad_x, root_top), root_colored)
 
             if out_scale > 1:
